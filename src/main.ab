@@ -1,0 +1,447 @@
+#!/usr/bin/env amber
+
+import { 
+  text_contains, 
+  lowercase, 
+  join, 
+  ends_with,
+  count_chars
+} from "std/text"
+import { 
+  uname_os, 
+  uname_machine, 
+  has_failed, 
+  env_var_get 
+} from "std/env"
+import { 
+  temp_dir_create,
+  dir_exists,
+  dir_create
+} from "std/fs"
+
+// ############################################################################
+// Utils
+// ############################################################################
+
+fun terminate (
+  msg: Text,
+  code: Int = 1
+): Null {
+  echo(msg)
+  exit(code)
+}
+
+fun is_empty (
+  target: Text | Num
+): Bool {
+  if {
+    target is Text: return target == ""
+    target is Num: return target == 0
+  }
+}
+
+fun filter_empty (
+  values
+) {
+  let result = []
+  for value in values {
+    if not is_empty(value): result = result + [value]
+  }
+  return result
+}
+
+fun path_join(
+  parts: [Text]
+): Text {
+  return join(
+    filter_empty(parts),
+    "/",
+  )
+}
+
+// ############################################################################
+// package info helper
+// ############################################################################
+
+const package_info__version = 0
+const package_info__base = 1
+const package_info__os = 2
+const package_info__arch = 3
+const package_info__extension = 4
+const package_info__use_installer = 5
+const package_info__use_new_names = 6
+const package_info__url = 7
+const package_info__filename = 8
+
+fun package_info__build () {
+  return [
+    "latest",  // package_info__version
+    "",  // package_info__base
+    "",  // package_info__os
+    "",  // package_info__arch
+    "",  // package_info__extension
+    "true",  // package_info__use_installer
+    "true",  // package_info__use_new_names
+    "",  // package_info__url
+    "",   // package_info__filename
+  ]
+}
+
+// ############################################################################
+// Helpers
+// ############################################################################
+
+fun is_mac () {
+  return text_contains(
+    lowercase(uname_os()),
+    lowercase("Darwin")
+  )
+}
+
+fun is_linux () {
+  return text_contains(
+    lowercase(uname_os()), 
+    lowercase("Linux")
+  )
+}
+
+fun is_version_at_least (
+  version: Text,
+  target: Text
+): Bool {
+  const least = trust $
+    printf '%s\n' "{version}" "{target}" | 
+    sort -V |
+    tail -n1
+  $
+  return version == least
+}
+
+fun get_latest_version () {
+  const url="https://api.github.com/repos/rstudio/tinytex-releases/releases"
+
+  const latest = $ 
+    wget -qO- "{url}" |
+    jq -r 'map(select(.tag_name != "daily")) | .[].tag_name' | 
+    sort -Vr | 
+    head -n 1
+  $?
+  return latest
+}
+
+fun select_package_using_new_names (
+  version: Text,
+  installation_type: Text = "TinyTeX-1"
+): [Text] {
+  const arch = uname_machine()
+  let package_info = package_info__build()
+
+  // New names defaults
+  package_info[package_info__use_new_names] = "true"
+  package_info[package_info__version] = version
+
+  if {
+    is_mac() {
+      package_info[package_info__base] = installation_type
+      package_info[package_info__os] = "darwin"
+      package_info[package_info__use_installer] = "false"
+      package_info[package_info__extension] = "tar.xz"
+    }
+    is_linux() and is_musl() {
+      package_info[package_info__base] = installation_type
+      package_info[package_info__os] = "linuxmusl"
+      package_info[package_info__arch] = "x86_64"
+      package_info[package_info__use_installer] = "false"
+      package_info[package_info__extension] = "tar.xz"
+    }
+    is_linux() and arch == "aarch64" {
+      package_info[package_info__base] = installation_type
+      package_info[package_info__os] = "linux"
+      package_info[package_info__arch] = "arm64"
+      package_info[package_info__use_installer] = "false"
+      package_info[package_info__extension] = "tar.xz"
+    }
+    is_linux() and arch == "aarch64" {
+      package_info[package_info__base] = installation_type
+      package_info[package_info__os] = "linux"
+      package_info[package_info__arch] = "x86_64"
+      package_info[package_info__use_installer] = "false"
+      package_info[package_info__extension] = "tar.xz"
+    }
+    else {
+      package_info[package_info__base] = "installer-unix"
+      package_info[package_info__use_installer] = "true"
+      package_info[package_info__extension] = "tar.gz"
+    }
+  }
+
+  return package_info
+}
+
+fun select_package_using_old_names (
+  version: Text
+): [Text] {
+  const arch = uname_machine()
+  let package_info = package_info__build()
+
+  // Old names defaults
+  package_info[package_info__use_new_names]="false"
+  package_info[package_info__version]=version
+
+  // Select installer
+  if {
+    is_mac() or ( is_linux() and arch == "x86_64" ) {
+      package_info[package_info__base] = "TinyTeX-1"
+      package_info[package_info__use_installer] = "false"
+    }
+    is_version_at_least(version, "v2025.02") {
+      package_info[package_info__base] = "installer-unix"
+    }
+    else {
+      package_info[package_info__base] = "install-unix"
+    }
+  }
+
+  // Select extension
+  if is_mac() {
+    package_info[package_info__extension] = "tgz"
+  } else {
+    package_info[package_info__extension] = "tar.gz"
+  }
+
+  return package_info
+}
+
+fun get_tinytex_package_info (
+  version: Text = "latest",
+  installation_type: Text = "TinyTeX-1"
+): [Text] {
+  if lowercase(version) == "latest" {
+    version = get_latest_version() failed {
+      terminate("There was an error while fetching github repository info")
+    }
+  }
+
+  if installation_type == "" {
+    installation_type = "TinyTeX-1"
+  }
+
+  let package_info = []
+  if (
+    lowercase(version) == "daily" 
+    or is_version_at_least(version, "v2026.03.02")
+  ) {
+    package_info = select_package_using_new_names(version, installation_type)
+  } else {
+    package_info = select_package_using_old_names(version)
+  }
+
+  return package_info
+}
+
+fun build_package_filename (
+  parts: [Text],
+  extension: Text
+) {
+  parts = filter_empty(parts)
+  const basename = join(parts, "-")
+  return "{basename}.{extension}"
+}
+
+fun build_tinytex_package_url (
+  package_info: [Text]
+) {
+  const version = package_info[package_info__version]
+
+  if version == "daily" {
+
+    const base = "https://github.com/rstudio/tinytex-releases/releases/download/daily"
+    const extension = package_info[package_info__extension]
+    const parts = [
+      package_info[package_info__base],
+      package_info[package_info__os],
+      package_info[package_info__arch],
+    ]
+    const filename = build_package_filename(parts, extension)
+    package_info[package_info__filename] = filename
+    package_info[package_info__url] = "{base}/{filename}"
+
+  } else {
+
+    const base = "https://github.com/rstudio/tinytex-releases/releases/download"
+    const extension = package_info[package_info__extension]
+    const parts = [
+      package_info[package_info__base],
+      package_info[package_info__os],
+      package_info[package_info__arch],
+      version
+    ]
+    const filename = build_package_filename(parts, extension) 
+    package_info[package_info__filename] = filename
+    package_info[package_info__url] = "{base}/{version}/{filename}"
+
+  }
+
+  return package_info
+}
+
+fun download_file (
+  url: Text,
+  output_path: Text
+) {
+  $ wget -qO "{output_path}" "{url}" $?
+}
+
+fun install_from_source (
+  workdir: Text,
+  install_file: Text,
+  install_dir: Text
+) {
+  cd(workdir) failed {
+    terminate("Could not access tmp install folder")
+  }
+  $ tar xf {install_file} $?
+  $ ./install.sh $?
+  dir_create(install_dir) failed {
+    terminate("Install dir could not been created ({install_dir})")
+  }
+  mv("./texlive/*", install_dir) failed {
+    terminate("Could not move bin folders into installation dir ({install_dir})")
+  }
+}
+
+fun install_prebuilt (
+  install_file: Text,
+  install_dir: Text
+) {
+  $ tar xf {install_file} -C {install_dir} $?
+
+}
+
+// ############################################################################
+// Validators helpers
+// ############################################################################
+
+fun is_musl () {
+  return 
+    not has_failed(
+      "ls /lib/libc.musl-*.so.1 && ldd --version 2>&1 | grep -qi musl"
+    )
+}
+
+fun validate_os (): Null? {
+  if not ( is_linux() or is_mac() ) {
+    fail 1
+  }
+}
+
+fun validate_tlmgr () { $ tlmgr --version $? }
+
+fun validate_requirements () {
+  $ perl -mFile::Find -e 1 > /dev/null 2>&1 $ failed {
+    terminate("Is required to have \"Perl\" installed but has not been found")
+  }
+  $ wget --help > /dev/null 2>&1 $ failed {
+    terminate("Is required to have \"wget\" installed but has not been found")
+  }
+  $ xz --version > /dev/null 2>&1 $ failed {
+    terminate("Is required to have \"xz\" installed but has not been found")
+  }
+  
+  $ tar --version > /dev/null 2>&1 $ failed {
+    terminate("Is required to have \"tar\" installed but has not been found")
+  }
+  $ jq --version > /dev/null 2>&1 $ failed {
+    terminate("Is required to have \"jq\" installed but has not been found")
+  }
+}
+
+// ############################################################################
+// Path helpers
+// ############################################################################
+
+fun get_install_dir (): Text? {
+  if {
+    is_linux() {
+      return "{trust env_var_get("HOME")}/"
+    }
+    is_mac() {
+      return "{trust env_var_get("HOME")}/Library"
+    }
+    else {
+      fail 1
+    }
+  }
+}
+
+fun prepare_tmp_install_dir (
+  tmp_dir: Text = "/tmp"
+): Text? {
+  const tmp_dir_template = path_join([ 
+    tmp_dir, 
+    "tinytex-install.XXXXXX" 
+  ])
+  return temp_dir_create(tmp_dir_template, true, true)?
+}
+
+fun clean_installation_dir (
+  target_dir: Text
+) {
+  // if (dir_exists(target_dir)) {
+  //   rm(target_dir, true, true) failed {
+  //     terminate("Installation dir could not been removed for a fresh install: {target_dir}")
+  //   }
+  // }
+}
+
+// ############################################################################
+// Main
+// ############################################################################
+
+main {
+  echo("Hello world!")
+  // validate_os() failed {
+  //   terminate("Not valid OS this install is built to work in Linux or Darwin systems")
+  // }
+  // validate_requirements()
+
+  // // const version = "latest"
+  // const version = "v2026.09"
+  // // const version = "v2025.01"
+
+  // const installation_type = "" // TinyTeX-0, TinyTeX-1, TinyTeX-2
+  // const install_dir = get_install_dir() failed {
+  //   terminate("Not valid OS this install is built to work in Linux or Darwin systems")    
+  // }
+  // echo(install_dir)
+  // const tmp_dir = prepare_tmp_install_dir() failed {
+  //   terminate("The install folder in the system's temp space could not been created")
+  // }
+  
+  // // Get package URL
+  // let package_info = get_tinytex_package_info(version, installation_type)
+  // package_info = build_tinytex_package_url(package_info)
+
+  // // If reinstall clean old install
+  // // clean_installation_dir(install_dir)
+
+  // // Download install file into tmp dir
+  // const download_filename = package_info[package_info__filename]
+  // const download_url = package_info[package_info__url]
+  // const download_output = "{tmp_dir}/{download_filename}"
+  // download_file(download_url, download_output) failed {
+  //   terminate("Install file could not been downloaded ({download_url})")
+  // }
+
+  // // Install bin into target dir
+  // const use_installer = package_info[package_info__use_installer]
+  // if use_installer == "true" {
+  //   install_from_source(tmp_dir, download_output, install_dir) failed {
+  //     terminate("There was an error while building the install from source")
+  //   }
+  // } else {
+  //   install_prebuilt(download_output, install_dir) failed {
+  //     terminate("There was an error while installing prebuild bins into install folder")
+  //   }
+  // }
+}
