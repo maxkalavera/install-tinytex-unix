@@ -1,7 +1,7 @@
 FROM alpine:latest
 
-RUN mkdir /root/workdir
-WORKDIR /root/workdir
+RUN mkdir /root/workspace
+WORKDIR /root/workspace
 
 RUN apk add \
   bash \

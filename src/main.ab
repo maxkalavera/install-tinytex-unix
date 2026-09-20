@@ -19,6 +19,13 @@ import {
   dir_create
 } from "std/fs"
 
+
+// ############################################################################
+// Globals
+// ############################################################################
+
+const HOME = trust env_var_get("HOME")
+
 // ############################################################################
 // Utils
 // ############################################################################
@@ -57,6 +64,10 @@ fun path_join(
     filter_empty(parts),
     "/",
   )
+}
+
+fun is_writable(path: Text): Bool? {
+    return $ test -w {path} $? == "0"
 }
 
 // ############################################################################
@@ -147,21 +158,21 @@ fun select_package_using_new_names (
       package_info[package_info__use_installer] = "false"
       package_info[package_info__extension] = "tar.xz"
     }
-    is_linux() and is_musl() {
+    is_linux() and is_musl() and arch == "x86_64" {
       package_info[package_info__base] = installation_type
       package_info[package_info__os] = "linuxmusl"
       package_info[package_info__arch] = "x86_64"
       package_info[package_info__use_installer] = "false"
       package_info[package_info__extension] = "tar.xz"
     }
-    is_linux() and arch == "aarch64" {
+    is_linux() and not is_musl() and arch == "aarch64" {
       package_info[package_info__base] = installation_type
       package_info[package_info__os] = "linux"
       package_info[package_info__arch] = "arm64"
       package_info[package_info__use_installer] = "false"
       package_info[package_info__extension] = "tar.xz"
     }
-    is_linux() and arch == "aarch64" {
+    is_linux() and not is_musl() and arch == "x86_64" {
       package_info[package_info__base] = installation_type
       package_info[package_info__os] = "linux"
       package_info[package_info__arch] = "x86_64"
@@ -315,7 +326,47 @@ fun install_prebuilt (
   install_dir: Text
 ) {
   $ tar xf {install_file} -C {install_dir} $?
+}
 
+fun bind_tinytex_dir (
+  target_dir: Text = ""
+) {
+  if target_dir != "" and not dir_exists(target_dir) {
+    terminate("Installation dir {target_dir} doesn't exist")
+  }
+
+  if not dir_exists(target_dir): target_dir = "{HOME}/.local/bin"
+  if not dir_exists(target_dir): target_dir = "{HOME}/bin"
+  if not dir_exists(target_dir) {
+    echo(
+      "No valid binding directory to link installation tried with ~/.local/bin and ~/bin"
+    )
+    return null
+  }
+
+  $ ./tlmgr option sys_bin target_dir $?
+}
+
+fun add_path () {
+  if {
+    is_mac() {
+      if {
+        trust is_writable("/usr/local/bin ") {
+          $ ./tlmgr path add $?
+        }
+        trust is_writable("/etc/paths.d") {
+          $ grep -qxF {pwd()} /etc/paths.d/TinyTeX && export PATH=\"\$PATH:{pwd()}\" $?
+        }
+        else {
+          echo("Admin privilege (password) is required to set up the PATH for TinyTeX:")
+          $ printf '%s\n' {pwd()} | sudo tee /etc/paths.d/TinyTeX > /dev/null $?
+        }
+      }
+    }
+    is_linux() {
+      $ ./tlmgr path add $?
+    }
+  }
 }
 
 // ############################################################################
@@ -363,10 +414,10 @@ fun validate_requirements () {
 fun get_install_dir (): Text? {
   if {
     is_linux() {
-      return "{trust env_var_get("HOME")}/"
+      return HOME
     }
     is_mac() {
-      return "{trust env_var_get("HOME")}/Library"
+      return "{HOME}/Library"
     }
     else {
       fail 1
@@ -384,9 +435,23 @@ fun prepare_tmp_install_dir (
   return temp_dir_create(tmp_dir_template, true, true)?
 }
 
-fun clean_installation_dir (
-  target_dir: Text
+fun get_tinytex_dir (
+  install_dir: Text
 ) {
+  if {
+    is_linux() {
+      return "{install_dir}/.TinyTeX"
+    }
+    is_mac () {
+      return "{install_dir}/TinyTeX"
+    } 
+  }  
+}
+
+fun clean_installation_dir (
+  tinytex_dir: Text
+) {
+  echo("cleaning {tinytex_dir}")
   // if (dir_exists(target_dir)) {
   //   rm(target_dir, true, true) failed {
   //     terminate("Installation dir could not been removed for a fresh install: {target_dir}")
@@ -394,54 +459,90 @@ fun clean_installation_dir (
   // }
 }
 
+fun get_installation_bin_dir (
+  tinytex_dir: Text
+) {
+  const bin_dirs = ls("{tinytex_dir}/bin")?
+  return "{tinytex_dir}/bin/{bin_dirs[0]}"
+}
+
 // ############################################################################
 // Main
 // ############################################################################
 
 main {
-  echo("Hello world!")
-  // validate_os() failed {
-  //   terminate("Not valid OS this install is built to work in Linux or Darwin systems")
-  // }
-  // validate_requirements()
+  validate_os() failed {
+    terminate("Not valid OS this install is built to work in Linux or Darwin systems")
+  }
+  validate_requirements()
 
-  // // const version = "latest"
-  // const version = "v2026.09"
-  // // const version = "v2025.01"
-
-  // const installation_type = "" // TinyTeX-0, TinyTeX-1, TinyTeX-2
-  // const install_dir = get_install_dir() failed {
-  //   terminate("Not valid OS this install is built to work in Linux or Darwin systems")    
-  // }
-  // echo(install_dir)
-  // const tmp_dir = prepare_tmp_install_dir() failed {
-  //   terminate("The install folder in the system's temp space could not been created")
-  // }
+  // const version = "latest"
+  const version = "v2026.09"
+  // const version = "v2025.01"
+  const no_bind = false
+  const no_path = false
+  const installation_type = "" // TinyTeX-0, TinyTeX-1, TinyTeX-2
+  const install_dir = get_install_dir() failed {
+    terminate("Not valid OS this install is built to work in Linux or Darwin systems")    
+  }
+  const tinytex_dir = get_tinytex_dir(install_dir)
+  const tmp_dir = prepare_tmp_install_dir() failed {
+    terminate("The install folder in the system's temp space could not been created")
+  }
   
-  // // Get package URL
-  // let package_info = get_tinytex_package_info(version, installation_type)
-  // package_info = build_tinytex_package_url(package_info)
+  // Get package URL
+  let package_info = get_tinytex_package_info(version, installation_type)
+  package_info = build_tinytex_package_url(package_info)
 
-  // // If reinstall clean old install
-  // // clean_installation_dir(install_dir)
+  // Download install file into tmp dir
+  const download_filename = package_info[package_info__filename]
+  const download_url = package_info[package_info__url]
+  const download_output = "{tmp_dir}/{download_filename}"
+  echo("Dowloading {download_url}")
+  download_file(download_url, download_output) failed {
+    terminate("Install file could not been downloaded ({download_url})")
+  }
 
-  // // Download install file into tmp dir
-  // const download_filename = package_info[package_info__filename]
-  // const download_url = package_info[package_info__url]
-  // const download_output = "{tmp_dir}/{download_filename}"
-  // download_file(download_url, download_output) failed {
-  //   terminate("Install file could not been downloaded ({download_url})")
-  // }
+  // Install bin into target dir
+  const use_installer = package_info[package_info__use_installer]
+  if use_installer == "true" {
+    install_from_source(tmp_dir, download_output, install_dir) failed {
+      terminate("There was an error while building the install from source")
+    }
+  } else {
+    install_prebuilt(download_output, install_dir) failed {
+      terminate("There was an error while installing prebuild bins into install folder")
+    }
+  }
 
-  // // Install bin into target dir
-  // const use_installer = package_info[package_info__use_installer]
-  // if use_installer == "true" {
-  //   install_from_source(tmp_dir, download_output, install_dir) failed {
-  //     terminate("There was an error while building the install from source")
-  //   }
-  // } else {
-  //   install_prebuilt(download_output, install_dir) failed {
-  //     terminate("There was an error while installing prebuild bins into install folder")
-  //   }
-  // }
+  // If reinstall clean old install
+  clean_installation_dir(tinytex_dir)
+
+  const bin_dir = get_installation_bin_dir(tinytex_dir) failed {
+    terminate("Installation folder bin could not been found")
+  }
+
+  trust cd(bin_dir)
+
+  if not no_path {
+    // Add installation to path
+    add_path() failed {
+      echo("TinyTex installation could not been added to PATH env variable")
+      echo("To set up PATH manually, run the following command and add it to your shell startup profile (e.g. ~/.zshrc):")
+      echo("  export PATH=\$PATH:$(pwd)")
+    }
+  } 
+  
+  if not no_bind {
+    bind_tinytex_dir() failed {
+      echo("TinyTex installation could not been binded to a local bin folder in path")
+    }
+  }
+
+  // GH issue #313
+  $ ./tlmgr postaction install script xetex $ failed {
+    echo("Xetex could not been installed with 'tlmgr'")
+  }
+
+  echo("TiniTeX installed correctly on: {tinytex_dir}")
 }
