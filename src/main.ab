@@ -425,14 +425,8 @@ fun get_install_dir (): Text? {
   }
 }
 
-fun prepare_tmp_install_dir (
-  tmp_dir: Text = "/tmp"
-): Text? {
-  const tmp_dir_template = path_join([ 
-    tmp_dir, 
-    "tinytex-install.XXXXXX" 
-  ])
-  return temp_dir_create(tmp_dir_template, true, true)?
+fun prepare_tmp_install_dir (): Text? {
+  return temp_dir_create("tinytex-install.XXXXXX", true, true)?
 }
 
 fun get_tinytex_dir (
