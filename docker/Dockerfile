@@ -3,15 +3,6 @@ FROM debian:stable-slim
 RUN mkdir /root/workspace
 WORKDIR /root/workspace
 
-# RUN apk add \
-#   bash \
-#   curl \
-#   perl \
-#   wget \
-#   xz \
-#   tar \
-#   jq
-
 # Install system dependencies
 RUN apt update \
   && apt-get install -y --no-install-recommends \

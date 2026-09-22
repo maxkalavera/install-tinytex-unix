@@ -3,9 +3,11 @@
 import { 
   text_contains, 
   lowercase, 
-  join, 
+  join,
+  split,
   ends_with,
-  count_chars
+  count_chars,
+  parse_int,
 } from "std/text"
 import { 
   uname_os, 
@@ -25,6 +27,13 @@ import {
 // ############################################################################
 
 const HOME = trust env_var_get("HOME")
+
+const VERSION = trust env_var_get("TINYTEX_VERSION")
+const BIND_DIR = trust env_var_get("TINYTEX_BIND_DIR")
+const TMP_DIR = trust env_var_get("TINYTEX_TMP_DIR")
+const INSTALLATION = trust env_var_get("TINYTEX_INSTALLATION")
+const NO_PATH = trust env_var_get("TINYTEX_NO_PATH")
+const NO_BIND = trust env_var_get("TINYTEX_NO_BIND")
 
 // ############################################################################
 // Utils
@@ -70,6 +79,32 @@ fun is_writable(path: Text): Bool? {
     return $ test -w {path} $? == "0"
 }
 
+fun multi_line(
+  strs: [Text]
+): Text {
+  return join(strs, "\n")
+}
+
+fun defaults(
+  values: [Text],
+  default: Text
+) {
+  for item in values {
+    if not is_empty(item) {
+      return item
+    }
+  }  
+  return default
+}
+
+fun parse_bool(
+  value: Text
+) {
+  return (
+   lowercase(value) == "true" 
+  ) then true else false
+}
+
 // ############################################################################
 // package info helper
 // ############################################################################
@@ -86,15 +121,15 @@ const package_info__filename = 8
 
 fun package_info__build () {
   return [
-    "latest",  // package_info__version
-    "",  // package_info__base
-    "",  // package_info__os
-    "",  // package_info__arch
-    "",  // package_info__extension
-    "true",  // package_info__use_installer
-    "true",  // package_info__use_new_names
-    "",  // package_info__url
-    "",   // package_info__filename
+    "latest",  // version
+    "",        // base
+    "",        // os
+    "",        // arch
+    "",        // extension
+    "true",    // use_installer
+    "true",    // use_new_names
+    "",        // url
+    "",        // filename
   ]
 }
 
@@ -461,29 +496,122 @@ fun get_installation_bin_dir (
 }
 
 // ############################################################################
+// Terminal options
+// ############################################################################
+
+fun print_usage () {
+  echo(multi_line([
+    "Usage: [OPTIONS] [ARGUMENTS]",
+    "",
+    "Options:",
+    "  -h        Help: Show this help message",
+    "  -i        Version: TinyTeX version to install, by default install",
+    "              latest, options: latest, daily or any released",
+    "              version (example: v2026.08)",
+    "  -b        Bind dir: Location to create symlinks for the installation ",
+    "              bins, default: ~/.local/bin for linux",
+    "  -x        Temp dir: temporal dir to place necessary files for install",
+    "  -s        No bind: Ignore binding or creating symlinks to 'bind-dir'",
+    "  -t        Type of installation: options: ",
+    "              TinyTeX-0, TinyTeX-1, TinyTeX-2 ",
+    "              (Option only valid after version: v2026.03.02)",
+    "  -p        Skip adding paths from the installation folder: ",
+    "              ~/.TinyTex/bin/../ to bin-dir location "
+  ]))
+}
+
+const options__help = 0
+const options__version = 1
+const options__bind_dir = 2
+const options__tmp_dir = 3
+const options__installation = 4
+const options__no_path = 5
+const options__no_bind = 6
+
+let options = [ "", "", "", "", "", "", "" ]
+
+const options_raw = $
+  while getopts ":hi:b:x:st:p" opt; do
+    case \$opt in
+      h) echo "0=true" ;;
+      i) echo "1=\$OPTARG" ;;
+      b) echo "2=\$OPTARG" ;;
+      x) echo "3=\$OPTARG" ;;
+      s) echo "4=true" ;;
+      t) echo "5=\$OPTARG" ;;
+      p) echo "6=true" ;;
+      *) exit 1 ;;
+    esac
+  done
+$ failed {
+  terminate("There is an invalid option in received options")
+}
+
+for option in split(options_raw, "\n") {
+  const option_arr = split(option, "=")
+  options[
+    trust parse_int(option_arr[0])
+  ] = option_arr[1]
+}
+
+// ############################################################################
 // Main
 // ############################################################################
 
-main {
+main (args) {
   validate_os() failed {
     terminate("Not valid OS this install is built to work in Linux or Darwin systems")
   }
   validate_requirements()
 
-  // const version = "latest"
-  const version = "v2026.09"
-  // const version = "v2025.01"
-  const no_bind = false
-  const no_path = false
-  const installation_type = "" // TinyTeX-0, TinyTeX-1, TinyTeX-2
-  const install_dir = get_install_dir() failed {
-    terminate("Not valid OS this install is built to work in Linux or Darwin systems")    
+  // **************************************************************************
+  // Optional parameters
+  // **************************************************************************
+  const version = defaults([
+    options[options__version],
+    VERSION
+  ], "latest")
+  const no_bind = parse_bool(
+    defaults([
+      options[options__no_bind],
+      NO_BIND
+    ], "false")
+  )
+  const no_path = parse_bool(
+    defaults([
+      options[options__no_path],
+      NO_PATH
+    ], "false")
+  )
+  // TinyTeX-0, TinyTeX-1, TinyTeX-2
+  const installation_type = defaults([
+    options[options__installation],
+    INSTALLATION
+  ], "TinyTeX-1")
+  // Temporal dir to place install files while installing
+  let tmp_dir = defaults([
+    options[options__installation],
+    INSTALLATION
+  ], "")
+  // If no tmp dir set in options build one with machine default's tools
+  if is_empty(tmp_dir) {
+    tmp_dir = prepare_tmp_install_dir() failed {
+      terminate("The install folder in the system's temp space could not been created")
+    }
   }
-  const tinytex_dir = get_tinytex_dir(install_dir)
-  const tmp_dir = prepare_tmp_install_dir() failed {
-    terminate("The install folder in the system's temp space could not been created")
+
+  let install_dir = len(args) >= 2 then args[1] else ""
+  if is_empty(install_dir) {
+    install_dir = get_install_dir() failed {
+      terminate("Not valid OS this install is built to work in Linux or Darwin systems")    
+    }
   }
+
+  // **************************************************************************
+  // Installation steps
+  // **************************************************************************
   
+  const tinytex_dir = get_tinytex_dir(install_dir)
   // Get package URL
   let package_info = get_tinytex_package_info(version, installation_type)
   package_info = build_tinytex_package_url(package_info)
