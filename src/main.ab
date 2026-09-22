@@ -388,9 +388,11 @@ fun add_path () {
       if {
         trust is_writable("/usr/local/bin ") {
           $ ./tlmgr path add $?
+          echo("TinyTeX bin folder successfully added to path")
         }
         trust is_writable("/etc/paths.d") {
           $ grep -qxF {pwd()} /etc/paths.d/TinyTeX && export PATH=\"\$PATH:{pwd()}\" $?
+          echo("TinyTeX bin folder successfully added to path")
         }
         else {
           echo("Admin privilege (password) is required to set up the PATH for TinyTeX:")
@@ -400,6 +402,7 @@ fun add_path () {
     }
     is_linux() {
       $ ./tlmgr path add $?
+      echo("TinyTeX bin folder successfully added to path")
     }
   }
 }
@@ -481,11 +484,11 @@ fun clean_installation_dir (
   tinytex_dir: Text
 ) {
   echo("cleaning {tinytex_dir}")
-  // if (dir_exists(target_dir)) {
-  //   rm(target_dir, true, true) failed {
-  //     terminate("Installation dir could not been removed for a fresh install: {target_dir}")
-  //   }
-  // }
+  if (dir_exists(target_dir)) {
+    rm(target_dir, true, true) failed {
+      terminate("Installation dir could not been removed for a fresh install: {target_dir}")
+    }
+  }
 }
 
 fun get_installation_bin_dir (
@@ -646,6 +649,12 @@ main (args) {
 
   trust cd(bin_dir)
 
+  if not no_bind {
+    bind_tinytex_dir() failed {
+      echo("TinyTex installation could not been binded to a local bin folder in path")
+    }
+  }
+
   if not no_path {
     // Add installation to path
     add_path() failed {
@@ -654,12 +663,6 @@ main (args) {
       echo("  export PATH=\$PATH:$(pwd)")
     }
   } 
-  
-  if not no_bind {
-    bind_tinytex_dir() failed {
-      echo("TinyTex installation could not been binded to a local bin folder in path")
-    }
-  }
 
   // GH issue #313
   $ ./tlmgr postaction install script xetex $ failed {
