@@ -52,7 +52,7 @@ That's it. Amber, Bash, TeX, and friends all live in the container image.
 > you can't afford to fix by hand.
 
 ```sh
-curl -sL https://raw.githubusercontent.com/<you>/tinytex-installer/main/src/install-tinytex-unix.sh | sh
+curl -sL https://github.com/maxkalavera/install-tinytex-unix/releases/download/v0.1.0-alpha/install-bin-unix.sh | sh
 ````
 
 Or, after cloning:
